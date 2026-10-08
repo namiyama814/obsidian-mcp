@@ -1,0 +1,7 @@
+# MCP worker (local wrangler dev)
+GITHUB_REPO_TOKEN=
+GITHUB_OWNER=namiyama814
+GITHUB_REPO=obsidian
+GITHUB_BRANCH=main
+AUTH_ISSUER=http://localhost:8787
+MCP_RESOURCE_URL=http://localhost:8788/mcp

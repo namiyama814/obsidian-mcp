@@ -1,0 +1,31 @@
+{
+  "name": "obsidian-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "2a1ab8b6a9b36f7f0c4292dce044e0c4",
+  "workers_dev": true,
+  "preview_urls": true,
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "services": [
+    {
+      "binding": "AUTH_SERVER",
+      "service": "obsidian-mcp-auth"
+    }
+  ],
+  "vars": {
+    "GITHUB_OWNER": "namiyama814",
+    "GITHUB_REPO": "obsidian",
+    "GITHUB_BRANCH": "main",
+    // Must match auth-worker AUTH_ISSUER / MCP_RESOURCE_URL.
+    "AUTH_ISSUER": "https://obsidian-mcp-auth.namiyama814.workers.dev",
+    "MCP_RESOURCE_URL": "https://obsidian-mcp.namiyama814.workers.dev/mcp"
+  }
+  // Secrets (set via wrangler secret put, never commit):
+  // - GITHUB_REPO_TOKEN
+}

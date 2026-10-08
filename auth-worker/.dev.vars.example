@@ -1,0 +1,7 @@
+# Auth worker (local wrangler dev)
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+CONSENT_SECRET=
+ALLOWED_GITHUB_LOGIN=namiyama814
+AUTH_ISSUER=http://localhost:8787
+MCP_RESOURCE_URL=http://localhost:8788/mcp

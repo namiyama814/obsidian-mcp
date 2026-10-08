@@ -1,0 +1,38 @@
+{
+  "name": "obsidian-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal Remote MCP server for Obsidian vaults on GitHub, running on Cloudflare Workers",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:auth": "wrangler dev -c auth-worker/wrangler.jsonc --port 8787",
+    "dev:mcp": "wrangler dev -c mcp-worker/wrangler.jsonc --port 8788",
+    "dev": "wrangler dev -c auth-worker/wrangler.jsonc -c mcp-worker/wrangler.jsonc",
+    "deploy:auth": "wrangler deploy -c auth-worker/wrangler.jsonc",
+    "deploy:mcp": "wrangler deploy -c mcp-worker/wrangler.jsonc",
+    "deploy": "npm run deploy:auth && npm run deploy:mcp",
+    "cf-typegen:auth": "wrangler types -c auth-worker/wrangler.jsonc --env-interface AuthEnv",
+    "cf-typegen:mcp": "wrangler types -c mcp-worker/wrangler.jsonc --env-interface McpEnv"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/namiyama814/obsidian-mcp.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.1",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.26.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261005.1",
+    "@types/node": "^26.6.4",
+    "typescript": "^5.9.3 || ^7.0.0",
+    "vitest": "^3.2.4 || ^5.0.0",
+    "wrangler": "^4.147.0"
+  }
+}

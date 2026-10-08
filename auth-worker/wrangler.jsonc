@@ -1,0 +1,32 @@
+{
+  "name": "obsidian-mcp-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-06",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "account_id": "2a1ab8b6a9b36f7f0c4292dce044e0c4",
+  "workers_dev": true,
+  "preview_urls": true,
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "ad0d3b22376a4dcb9de080ca593d7e29",
+      "preview_id": "4626a39f9d714aa5afb0c6847d73ea6a"
+    }
+  ],
+  "vars": {
+    "ALLOWED_GITHUB_LOGIN": "namiyama814",
+    // Set these to your deployed workers.dev (or custom domain) URLs before deploy.
+    "AUTH_ISSUER": "https://obsidian-mcp-auth.namiyama814.workers.dev",
+    "MCP_RESOURCE_URL": "https://obsidian-mcp.namiyama814.workers.dev/mcp"
+  }
+  // Secrets (set via wrangler secret put, never commit):
+  // - GITHUB_CLIENT_ID
+  // - GITHUB_CLIENT_SECRET
+  // - CONSENT_SECRET (optional, 32+ chars)
+}
