@@ -214,7 +214,10 @@ npx @modelcontextprotocol/inspector@latest
 | `list_vaults` | `obsidian.read` | トップレベル Vault 一覧（`.obsidian` 除外） |
 | `list_notes` | `obsidian.read` | Vault 内 `.md` 一覧 |
 | `read_note` | `obsidian.read` | ノート本文 + `sha` + commit 情報 |
-| `search_notes` | `obsidian.read` | ファイル名・本文検索（日本語可） |
+| `search_notes` | `obsidian.read` | ファイル名・本文検索、抜粋・行番号、タグ・フォルダ・更新日で絞り込み |
+| `read_notes` | `obsidian.read` | 複数ノートの一括読み取り（最大20件） |
+| `get_backlinks` | `obsidian.read` | 同じVault内で対象ノートを参照するリンクを取得 |
+| `update_note_section` | `obsidian.read` + `obsidian.write` | 見出し単位で本文を更新（最新SHA必須） |
 | `create_note` | `obsidian.write` | 新規作成（既存はエラー） |
 | `update_note` | `obsidian.write` | 全文更新（`expectedSha` 不一致は `CONFLICT`） |
 | `move_note` | `obsidian.read` + `obsidian.write` | ノートの移動・改名（上書き禁止、1コミット） |
@@ -224,6 +227,69 @@ npx @modelcontextprotocol/inspector@latest
 `move_note` は `vault`、`path`、`destinationPath` を指定します。`destinationVault` を省略すると同じ Vault 内で移動・改名します。移動先の Vault は既存のものに限り、既存ファイル・ディレクトリへの上書きは拒否します。追加と削除を1コミットで反映し、ブランチの競合時には `CONFLICT` を返します。ノート内リンクや他のノートからのリンクは書き換えません。リポジトリの tree が大きすぎて取得結果が省略された場合は、安全のため `TREE_TRUNCATED` で中止します。
 
 `delete_note` は `vault`、`path` を指定してノートを削除します。削除はGit履歴に残ります。両ツールとも `expectedSha`（直近の `read_note` の SHA）と `commitMessage` を任意指定できます。`expectedSha` が現在のノートと異なる場合は `CONFLICT` を返します。
+
+### 検索の抜粋と絞り込み
+
+`search_notes` はファイル名・本文を検索し、本文に一致した場合は `matches` に抜粋（`snippet`）と1始まりの行番号（`lineNumber`）を返します。1ノートあたり最大5行を返し、最初の一致は結果直下の `snippet`・`lineNumber` にも入ります。ファイル名だけに一致した場合は `matches` が空になり、行番号は返しません。検索文字列は大文字・小文字を区別しない文字列一致です。
+
+```json
+{
+  "query": "決定事項",
+  "vault": "main",
+  "folder": "Projects",
+  "tags": ["仕事", "会議"],
+  "updatedAfter": "2026-10-01T00:00:00+09:00",
+  "updatedBefore": "2026-10-31T23:59:59+09:00",
+  "limit": 20
+}
+```
+
+`vault`・`folder`・`tags`・日時・`limit` は省略できます。フォルダ指定は配下のサブフォルダも含み、Vaultを省略した場合は各Vault内の同じフォルダを対象にします。タグはすべて一致するノートを返します。先頭の `#` は任意で、本文のタグと先頭のYAML frontmatterの `tags`（単一タグ・カンマ区切りの配列・箇条書き）を読み取ります。コード内のタグは除外し、`仕事` と `仕事/会議` は別のタグとして扱います。
+
+更新日はGitHubの最終コミットのcommitter日時です。`updatedAfter`・`updatedBefore` はタイムゾーン付きのISO 8601日時で、指定した境界を含みます。コミット日時を取得できないノートは日時フィルターの結果に含めません。
+
+絞り込みを指定しない検索はGitHub Code Searchを優先し、設定されたブランチの本文を取得して抜粋を作ります。Code Searchが使えない場合、有効な結果がない場合、または絞り込みや `scanOffset` を指定した場合はtree走査を使います。走査は1回につき最大80ファイルで、1 MBを超えるファイルは対象外です。件数は既定20件、最大50件です。
+
+走査が途中で止まった場合は `truncated: true` と `nextScanOffset` を返します。同じ条件にその値を `scanOffset` として加えると続きを取得できます。オフセットはパス順の一覧に対する位置なので、取得中にノートの追加・移動があった場合は最初から検索し直してください。GitHubのtree自体が省略された場合も `truncated: true` になり、`nextScanOffset: null` でも全件検索できたとは限りません。Code Searchの件数上限に達した場合も `truncated: true` になります。tree走査へ切り替えるには `scanOffset: 0` を指定してください。
+
+### 複数ノートの読み取り
+
+```json
+{
+  "notes": [
+    { "vault": "main", "path": "Projects/会議.md" },
+    { "vault": "main", "path": "Projects/企画.md" }
+  ]
+}
+```
+
+`read_notes` は1〜20件を読み取り、入力順の `results` に各ノートの `result` を返します。本文・SHA・コミット情報は `read_note` と同じです。見つからないノートなどのエラーも個別に返すので、各 `result.ok` を確認してください。パスが不正な場合は読み取り前にバッチ全体を拒否します。
+
+### 見出し単位の更新
+
+```json
+{
+  "vault": "main",
+  "path": "Projects/会議.md",
+  "heading": "決定事項",
+  "content": "- 次回は10月20日開催",
+  "expectedSha": "直近のread_noteが返したSHA"
+}
+```
+
+`update_note_section` は見出しを残し、その下の本文を置き換えます。子見出しも置換範囲に含み、次の同じ階層または上位の見出しの直前で止まります。`#` を使う見出しと、下線（`===`・`---`）を使う見出しに対応し、コードブロック内の見出しは無視します。`heading` には `#` を除いた見出し表記を完全一致で指定します。
+
+同名の見出しが複数ある場合は `AMBIGUOUS_HEADING` を返します。`occurrence: 2` のように1始まりの出現順を指定すると選択できます。見出しがない場合は `HEADING_NOT_FOUND` です。`expectedSha` は必須で、読み取り後の変更や書き込み直前の競合は `CONFLICT` になります。`commitMessage` も任意指定できます。
+
+### バックリンク
+
+```json
+{ "vault": "main", "path": "Projects/会議.md", "limit": 20 }
+```
+
+`get_backlinks` は対象ノートが存在することを確認し、同じVault内の参照元ノートを返します。`[[ノート]]`・`[[Projects/会議#見出し|別名]]` のWikiリンクと、`[表示名](../Projects/会議.md)` のインラインMarkdownリンク、埋め込みに対応します。MarkdownリンクのURLエンコードも読み取ります。外部URL、コード内のリンク、対象ノート自身は除外します。Markdownの参照形式リンクは対象外です。
+
+短いWikiリンクが複数のノートに一致する場合は除外します。結果の `matches` は参照元の抜粋と1始まりの行番号で、1ノートあたり最大20行です。既定20件・最大50件、1回につき最大80ファイルを走査します。検索と同じ `truncated`・`nextScanOffset`・`scanOffset` で続きを取得でき、1 MBを超えるファイルは対象外です。
 
 ## セキュリティメモ
 

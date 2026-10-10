@@ -190,9 +190,14 @@ export function createObsidianMcpServer(
     {
       title: "Search Markdown notes",
       description:
-        "READ-ONLY. Search Markdown note filenames and bodies. Supports Japanese queries. Optionally limit to one vault. Uses GitHub Code Search when available, otherwise a bounded tree scan (not unbounded full-repo download). Requires OAuth scope obsidian.read.",
+        "READ-ONLY. Search Markdown note filenames and bodies. Returns matched snippets and one-based line numbers. Supports Japanese queries. Optional folder, tags (all required), and inclusive Git commit date filters use a bounded scan. Continue with nextScanOffset when truncated. Optionally limit to one vault. Uses GitHub Code Search when available, otherwise a bounded tree scan (not unbounded full-repo download). Requires OAuth scope obsidian.read.",
       inputSchema: z.object({
-        query: z.string().describe("Search query (Japanese or English)"),
+        query: z.string().min(1).describe("Literal search text (Japanese or English)"),
+        folder: z.string().optional().describe("Vault-relative folder, includes descendants"),
+        tags: z.array(z.string().min(1)).max(20).optional().describe("All tags must match; inline and frontmatter tags, optional # prefix"),
+        updatedAfter: z.iso.datetime({ offset: true }).optional().describe("Inclusive Git commit timestamp lower bound (ISO 8601 with timezone)"),
+        updatedBefore: z.iso.datetime({ offset: true }).optional().describe("Inclusive Git commit timestamp upper bound (ISO 8601 with timezone)"),
+        scanOffset: z.number().int().min(0).optional().describe("Continue bounded tree scan with previous nextScanOffset"),
         vault: z
           .string()
           .optional()
@@ -220,6 +225,30 @@ export function createObsidianMcpServer(
         client.searchNotes(args),
       ),
   );
+
+  server.registerTool("read_notes", {
+    title: "Read multiple Markdown notes",
+    description: "READ-ONLY. Read 1 to 20 notes, including content, SHA and commit metadata. Results preserve request order and individual errors. Requires obsidian.read.",
+    inputSchema: z.object({ notes: z.array(z.object({ vault: z.string(), path: z.string() })).min(1).max(20) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
+  }, async (args, extra) => run("read_notes", args, extra as ToolExtra, "read", () => client.readNotes(args)));
+
+  server.registerTool("get_backlinks", {
+    title: "Find incoming links to a note",
+    description: "READ-ONLY. Find wikilinks and inline Markdown links (including embeds) to a note within its vault. Returns snippets and line numbers. Ignores fenced/inline code and ambiguous basename links. Scan at most 80 files; continue with nextScanOffset when truncated. Requires obsidian.read.",
+    inputSchema: z.object({ vault: z.string(), path: z.string(), limit: z.number().int().min(1).max(50).optional(), scanOffset: z.number().int().min(0).optional() }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
+  }, async (args, extra) => run("get_backlinks", args, extra as ToolExtra, "read", () => client.getBacklinks(args)));
+
+  server.registerTool("update_note_section", {
+    title: "Replace a heading section",
+    description: "WRITE. Replace the body beneath an ATX (#) or Setext heading, including subsections, until the next heading at the same or higher level. Keeps the selected heading. Exact heading title without #; occurrence resolves duplicates. Requires expectedSha from read_note, obsidian.read and obsidian.write.",
+    inputSchema: z.object({ vault: z.string(), path: z.string(), heading: z.string().min(1), content: z.string(), expectedSha: z.string().min(1), occurrence: z.number().int().min(1).optional(), commitMessage: z.string().optional() }),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] }] },
+  }, async (args, extra) => run("update_note_section", args, extra as ToolExtra, "write", () => client.updateNoteSection(args)));
 
   server.registerTool(
     "create_note",

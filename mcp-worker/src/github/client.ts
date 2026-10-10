@@ -6,6 +6,7 @@ import {
   toVaultSubdir,
   validateVaultName,
 } from "../../../shared/src/paths.ts";
+import { findMatches, extractTags, replaceSection, backlinkMatches } from "../../../shared/src/markdown.ts";
 import { fail, ok, type ToolResult } from "../../../shared/src/response.ts";
 
 export type GitHubRepoConfig = {
@@ -218,45 +219,143 @@ export class GitHubObsidianClient {
     }
   }
 
+  async readNotes(input: { notes: Array<{ vault: string; path: string }> }): Promise<ToolResult> {
+    if (!input.notes.length || input.notes.length > 20) return fail("INVALID_INPUT", "Provide 1 to 20 notes.");
+    // Validate the whole batch before making requests. Individual read errors remain in results.
+    try {
+      const notes = input.notes.map(note => ({ vault: validateVaultName(note.vault), path: normalizeNotePath(note.path) }));
+      const results: Array<{ vault: string; path: string; result: ToolResult }> = [];
+      for (const note of notes) results.push({ ...note, result: await this.readNote(note) });
+      return ok({ count: results.length, results });
+    } catch (error) { return this.mapError(error); }
+  }
+
+  async updateNoteSection(input: {
+    vault: string; path: string; heading: string; content: string;
+    expectedSha: string; occurrence?: number; commitMessage?: string;
+  }): Promise<ToolResult> {
+    if (!input.expectedSha?.trim()) return fail("INVALID_INPUT", "expectedSha from read_note is required.");
+    const note = await this.readNote(input);
+    if (!note.ok) return note;
+    if (note.sha !== input.expectedSha) return fail("CONFLICT", "The note changed after it was read.", { currentSha: String(note.sha) });
+    const replacement = replaceSection(String(note.content), input.heading, input.content, input.occurrence);
+    if (!replacement.ok) return fail(replacement.error, replacement.message);
+    return this.updateNote({ ...input, content: replacement.content });
+  }
+
   async searchNotes(input: {
-    query: string;
-    vault?: string;
-    limit?: number;
+    query: string; vault?: string; limit?: number; folder?: string;
+    tags?: string[]; updatedAfter?: string; updatedBefore?: string; scanOffset?: number;
   }): Promise<ToolResult> {
     try {
       const query = input.query?.trim();
-      if (!query) {
-        return fail("INVALID_QUERY", "query is required.");
-      }
+      if (!query) return fail("INVALID_QUERY", "query is required.");
       const limit = Math.min(Math.max(input.limit ?? 20, 1), 50);
-      let vault: string | undefined;
-      if (input.vault) {
-        vault = validateVaultName(input.vault);
-        await this.assertVaultExists(vault);
+      const vault = input.vault ? validateVaultName(input.vault) : undefined;
+      if (vault) await this.assertVaultExists(vault);
+      const folder = input.folder ? normalizeNotePath(input.folder, { requireMarkdown: false }) : undefined;
+      const after = input.updatedAfter === undefined ? undefined : Date.parse(input.updatedAfter);
+      const before = input.updatedBefore === undefined ? undefined : Date.parse(input.updatedBefore);
+      if ((after !== undefined && !Number.isFinite(after)) || (before !== undefined && !Number.isFinite(before)) ||
+          (after !== undefined && before !== undefined && after > before)) return fail("INVALID_INPUT", "Invalid updated date range.");
+      const offset = input.scanOffset ?? 0;
+      if (!Number.isInteger(offset) || offset < 0) return fail("INVALID_INPUT", "scanOffset must be a nonnegative integer.");
+      const tags = (input.tags ?? []).map(tag => tag.replace(/^#/, "").toLowerCase());
+      if (tags.some(tag => !tag || /\s/.test(tag))) return fail("INVALID_INPUT", "Tags must be nonempty and contain no spaces.");
+      if (!folder && !tags.length && after === undefined && before === undefined && input.scanOffset === undefined) {
+        const codeSearch = await this.tryCodeSearch(query, vault, limit);
+        if (codeSearch?.length) {
+          const results = [];
+          for (const candidate of codeSearch) {
+            const file = await this.getFile(`${candidate.vault}/${candidate.path}`);
+            if (!file || file.size > 1_000_000) continue;
+            const matches = findMatches(decodeFileContent(file), query);
+            if (!matches.length && !candidate.path.toLowerCase().includes(query.toLowerCase())) continue;
+            results.push({ ...candidate, sha: file.sha, match: matches.length ? "content" : "filename",
+              matches, snippet: matches[0]?.snippet, lineNumber: matches[0]?.lineNumber });
+          }
+          if (results.length) return ok({ query, vault: vault ?? null, method: "code_search", count: results.length, results,
+            truncated: codeSearch.length >= limit });
+        }
       }
-
-      const codeSearch = await this.tryCodeSearch(query, vault, limit);
-      if (codeSearch) {
-        return ok({
-          query,
-          vault: vault ?? null,
-          method: "code_search",
-          count: codeSearch.length,
-          results: codeSearch,
-        });
+      const scan = await this.scanNotes(vault, folder);
+      const results = [];
+      let next = offset;
+      let scanned = 0;
+      while (next < scan.notes.length && scanned < 80 && results.length < limit) {
+        const candidate = scan.notes[next++]!;
+        scanned++;
+        if ((candidate.size ?? 0) > 1_000_000) continue;
+        const file = await this.getFile(`${candidate.vault}/${candidate.path}`);
+        if (!file) continue;
+        const content = decodeFileContent(file);
+        const matches = findMatches(content, query);
+        const filenameMatch = candidate.path.toLowerCase().includes(query.toLowerCase());
+        if (!matches.length && !filenameMatch) continue;
+        const noteTags = extractTags(content);
+        if (!tags.every(tag => noteTags.includes(tag))) continue;
+        let updatedAt: string | undefined;
+        if (after !== undefined || before !== undefined) {
+          const commit = await this.latestCommitForPath(`${candidate.vault}/${candidate.path}`);
+          updatedAt = commit?.committer?.date ?? commit?.author?.date;
+          const date = updatedAt ? Date.parse(updatedAt) : NaN;
+          if (!Number.isFinite(date) || (after !== undefined && date < after) || (before !== undefined && date > before)) continue;
+        }
+        results.push({ ...candidate, name: candidate.path.split("/").pop(), sha: file.sha,
+          match: matches.length ? "content" : "filename", matches, snippet: matches[0]?.snippet,
+          lineNumber: matches[0]?.lineNumber, tags: noteTags, updatedAt });
       }
+      return ok({ query, vault: vault ?? null, method: "tree_scan", count: results.length, results, scanned,
+        truncated: scan.truncated || next < scan.notes.length, nextScanOffset: next < scan.notes.length ? next : null });
+    } catch (error) { return this.mapError(error); }
+  }
 
-      const local = await this.localSearch(query, vault, limit);
-      return ok({
-        query,
-        vault: vault ?? null,
-        method: "tree_scan",
-        count: local.length,
-        results: local,
-      });
-    } catch (error) {
-      return this.mapError(error);
+  async getBacklinks(input: { vault: string; path: string; limit?: number; scanOffset?: number }): Promise<ToolResult> {
+    try {
+      const vault = validateVaultName(input.vault);
+      const path = normalizeNotePath(input.path);
+      await this.assertVaultExists(vault);
+      if (!await this.getFile(`${vault}/${path}`)) return fail("NOT_FOUND", "Target note does not exist.");
+      const scan = await this.scanNotes(vault);
+      const paths = scan.notes.map(note => note.path);
+      const limit = Math.min(Math.max(input.limit ?? 20, 1), 50);
+      const offset = input.scanOffset ?? 0;
+      if (!Number.isInteger(offset) || offset < 0) return fail("INVALID_INPUT", "scanOffset must be a nonnegative integer.");
+      const results = [];
+      let next = offset;
+      let scanned = 0;
+      while (next < scan.notes.length && scanned < 80 && results.length < limit) {
+        const candidate = scan.notes[next++]!;
+        scanned++;
+        if (candidate.path === path || (candidate.size ?? 0) > 1_000_000) continue;
+        const file = await this.getFile(`${vault}/${candidate.path}`);
+        if (!file) continue;
+        const matches = backlinkMatches(decodeFileContent(file), candidate.path, path, paths);
+        if (matches.length) results.push({ vault, path: candidate.path, sha: file.sha, matches });
+      }
+      return ok({ vault, path, count: results.length, results, scanned,
+        truncated: scan.truncated || next < scan.notes.length, nextScanOffset: next < scan.notes.length ? next : null });
+    } catch (error) { return this.mapError(error); }
+  }
+
+  private async scanNotes(vault?: string, folder?: string): Promise<{
+    notes: Array<{ vault: string; path: string; sha?: string; size?: number }>; truncated: boolean;
+  }> {
+    const { data: branch } = await this.request<{ commit: { sha: string } }>(`/branches/${encodeURIComponent(this.config.branch)}`);
+    const { data: tree } = await this.request<GitTreeResponse>(`/git/trees/${branch.commit.sha}?recursive=1`);
+    const notes = [];
+    for (const entry of tree.tree) {
+      if (entry.type !== "blob" || !entry.path?.toLowerCase().endsWith(".md")) continue;
+      const slash = entry.path.indexOf("/");
+      if (slash < 1) continue;
+      const v = entry.path.slice(0, slash);
+      const path = entry.path.slice(slash + 1);
+      if (!isVaultDirectoryName(v) || (vault && vault !== v) || (folder && !path.startsWith(`${folder}/`))) continue;
+      try { normalizeNotePath(path); } catch { continue; }
+      notes.push({ vault: v, path, sha: entry.sha, size: entry.size });
     }
+    notes.sort((a, b) => `${a.vault}/${a.path}`.localeCompare(`${b.vault}/${b.path}`));
+    return { notes, truncated: tree.truncated };
   }
 
   async createNote(input: {
@@ -603,10 +702,11 @@ export class GitHubObsidianClient {
 
   private async latestCommitForPath(repoPath: string): Promise<CommitInfo | null> {
     try {
-      const { data } = await this.request<CommitInfo[]>(
+      const { data } = await this.request<Array<{ sha: string; commit: Omit<CommitInfo, "sha"> }>>(
         `/commits?path=${encodeURIComponent(repoPath)}&sha=${encodeURIComponent(this.config.branch)}&per_page=1`,
       );
-      return Array.isArray(data) && data[0] ? data[0] : null;
+      const latest = Array.isArray(data) ? data[0] : undefined;
+      return latest?.commit ? { sha: latest.sha, ...latest.commit } : null;
     } catch {
       return null;
     }
@@ -679,6 +779,7 @@ export class GitHubObsidianClient {
           const itemVault = item.path.slice(0, slash);
           if (!isVaultDirectoryName(itemVault)) return null;
           if (vault && itemVault !== vault) return null;
+          try { normalizeNotePath(item.path.slice(slash + 1)); } catch { return null; }
           return {
             vault: itemVault,
             path: item.path.slice(slash + 1),
@@ -698,72 +799,6 @@ export class GitHubObsidianClient {
       }
       throw error;
     }
-  }
-
-  private async localSearch(
-    query: string,
-    vault: string | undefined,
-    limit: number,
-  ): Promise<
-    Array<{
-      vault: string;
-      path: string;
-      name: string;
-      match: "filename" | "content";
-      snippet?: string;
-    }>
-  > {
-    const lower = query.toLowerCase();
-    const prefixes = vault
-      ? [vault]
-      : (await this.listVaultNames());
-
-    const results: Array<{
-      vault: string;
-      path: string;
-      name: string;
-      match: "filename" | "content";
-      snippet?: string;
-    }> = [];
-
-    const maxFilesToScan = 80;
-    let scanned = 0;
-
-    for (const v of prefixes) {
-      const notes = await this.listMarkdownViaTree(v);
-      for (const note of notes) {
-        if (results.length >= limit) return results;
-        const name = note.path.split("/").pop() ?? note.path;
-        if (note.path.toLowerCase().includes(lower) || name.toLowerCase().includes(lower)) {
-          results.push({ vault: v, path: note.path, name, match: "filename" });
-          continue;
-        }
-        if (scanned >= maxFilesToScan) continue;
-        scanned += 1;
-        const file = await this.getFile(`${v}/${note.path}`);
-        if (!file) continue;
-        const content = decodeFileContent(file);
-        const idx = content.toLowerCase().indexOf(lower);
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 40);
-          const end = Math.min(content.length, idx + query.length + 40);
-          results.push({
-            vault: v,
-            path: note.path,
-            name,
-            match: "content",
-            snippet: content.slice(start, end),
-          });
-        }
-      }
-    }
-    return results;
-  }
-
-  private async listVaultNames(): Promise<string[]> {
-    const listed = await this.listVaults();
-    if (!listed.ok) return [];
-    return (listed.vaults as string[]) ?? [];
   }
 
   private mapError(error: unknown): ToolResult {
@@ -788,12 +823,12 @@ export class GitHubObsidianClient {
 }
 
 function decodeFileContent(file: GitHubContentFile): string {
-  if (!file.content) return "";
   const encoding = file.encoding ?? "base64";
   if (encoding !== "base64") {
     throw new GitHubApiError(0, "", `Unsupported content encoding: ${encoding}`);
   }
-  return decodeBase64Utf8(file.content.replace(/\n/g, ""));
+  if (file.content === undefined && file.size > 0) throw new GitHubApiError(0, "", "GitHub did not return the note content (file may exceed the Contents API limit).");
+  return decodeBase64Utf8((file.content ?? "").replace(/\n/g, ""));
 }
 
 function encodeBase64Utf8(text: string): string {
