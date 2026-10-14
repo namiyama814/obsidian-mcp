@@ -1,6 +1,6 @@
 # 社内公開機能の検証記録
 
-検証日: 2026年10月15日（JST）。実資料の公開、本番の同期起動、本番Workerへのデプロイは行っていません。
+検証日: 2026年10月15日（JST）。実資料の公開と本番の同期起動は行っていません。本番MCP Workerのリリース結果は末尾に記載します。
 
 ## 自動テスト
 
@@ -58,8 +58,22 @@ officeSystem、原本 `namiyama814/obsidian`、Cloudflare Accessの設定や認�
 
 ## 未実施と運用上の制約
 
-- 本番Workerのデプロイ、`PUBLICATION_PLAN_SECRET`・`OFFICE_GITHUB_TOKEN`の本番設定は未実施です。初回設定とリリースは [利用手順](publication.md#管理者の初回設定) に記載しました。
+- 本番MCP Workerのデプロイと`PUBLICATION_PLAN_SECRET`の設定は完了しました。`OFFICE_GITHUB_TOKEN`は未設定です。状態取得は確認不能、手動同期は未設定として返し、原本登録後は毎時17分の同期を待ちます。権限の設定方法は [利用手順](publication.md#管理者の初回設定) に記載しました。
 - 本番の`deploy-state`を使った実資料の資料単位判定、本番`sync.yml`のdispatch、実ユーザーのAccess PINログインは未検証です。状態とdispatchは模擬GitHub応答で検証しています。
-- 実GitHub検証はローカルMCP transportから行いました。Cloudflare Worker内の実行・本番OAuth接続は別途確認が必要です。
+- 実GitHub検証はローカルMCP transportから行いました。本番Workerの起動・ヘルスチェック・未認証拒否は確認済みですが、本番OAuth接続後の新ツールの実行は別途確認が必要です。
 - API呼出し・読込サイズ・履歴の検証上限があります。上限超過時は検証を省略せず停止します。巨大Vaultでの性能測定は未実施です。
 - 既存依存の`agents@0.26.0`系列に、`npm audit --omit=dev`でhigh 3件が報告されます。該当する`agents`・MCP client・SDKのバージョンは元のlockfileと同じです。この機能追加では互換性を伴うSDK更新を行っていません。
+
+## 本番MCP Workerのリリース
+
+2026年10月15日（JST）、ユーザーの依頼によりGitHubへのpushと本番デプロイを実行しました。
+
+- ソース: [cfd192f](https://github.com/namiyama814/obsidian-mcp/commit/cfd192f) を`main`へpushしました。
+- Worker: `obsidian-mcp`。バージョンIDは`d35695f9-c886-4074-890e-2dc8beb197c7`です。
+- エンドポイント: `https://obsidian-mcp.namiyama814.workers.dev/mcp`。
+- 新規のランダムな`PUBLICATION_PLAN_SECRET`をSecretへ登録しました。値はソース・ログ・チャットへ出していません。既存の原本用トークンは維持しています。
+- デプロイ前の119テスト・型チェックが成功し、Workerの起動時間は50msでした。
+- 本番で`/health`の200と`status: ok`、OAuth保護リソースメタデータの200、未認証`tools/list`の401とBearer認証要求を確認しました。
+- `OFFICE_GITHUB_TOKEN`はWorkerにも実行環境にもないため登録していません。既存のGitHub CLI用認証をofficeSystem専用トークンとして転用していません。
+
+実資料への操作、officeSystemの本番同期起動、Cloudflare Accessや閲覧サイトの変更は行っていません。
