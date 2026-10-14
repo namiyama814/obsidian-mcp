@@ -207,6 +207,12 @@ npx @modelcontextprotocol/inspector@latest
 5. ChatGPT が `/.well-known/oauth-protected-resource/mcp` → Authorization Server Metadata を discovery します（CIMD / DCR 対応）
 6. ブラウザで GitHub ログインし、許可アカウントで同意
 
+## 社内ドキュメントサイトへの公開
+
+ノート・承認した添付・固定ID台帳を、一つのGitコミットで原本へ登録できます。利用者のターミナル操作は不要です。**`main/社内共有/`へ置くと、Accessで認証した`@zuikaku.biz`の全メールアドレスが閲覧できます。** 原本登録と本番反映は区別して返します。
+
+[利用手順・初回Secret設定・状態と競合への対処](docs/publication.md) / [検証結果](docs/publication-validation.md)
+
 ## MCP Tools
 
 | Tool | Scope | 説明 |
@@ -223,6 +229,13 @@ npx @modelcontextprotocol/inspector@latest
 | `move_note` | `obsidian.read` + `obsidian.write` | ノートの移動・改名（上書き禁止、1コミット） |
 | `delete_note` | `obsidian.read` + `obsidian.write` | ノート削除（SHA で競合確認） |
 | `append_note` | `obsidian.write` | 末尾追記（SHA 再確認） |
+| `prepare_publication` | `obsidian.read` | 公開範囲・添付・参照・リビジョンを確認。原本は変更しない |
+| `publish_note` | `obsidian.read` + `obsidian.write` | 確認済み予定を単一コミットで原本へ登録 |
+| `get_publication_status` | `obsidian.read` | deploy-stateと原本から資料の反映状態を確認 |
+| `unpublish_note` | `obsidian.read` + `obsidian.write` | 原本を保持して公開対象から外し、IDを廃止 |
+| `trigger_publication_sync` | `obsidian.read` + `obsidian.write` | 別権限でsync.ymlを明示起動。forceは既定false |
+
+共有文書の新規作成・移動・削除は公開用ツールを使います。通常の本文更新では`doc_id`を保持してください。
 
 `move_note` は `vault`、`path`、`destinationPath` を指定します。`destinationVault` を省略すると同じ Vault 内で移動・改名します。移動先の Vault は既存のものに限り、既存ファイル・ディレクトリへの上書きは拒否します。追加と削除を1コミットで反映し、ブランチの競合時には `CONFLICT` を返します。ノート内リンクや他のノートからのリンクは書き換えません。リポジトリの tree が大きすぎて取得結果が省略された場合は、安全のため `TREE_TRUNCATED` で中止します。
 

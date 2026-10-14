@@ -1,3 +1,4 @@
+import { frontmatter, shared } from "../publication/content.ts";
 import {
   isVaultDirectoryName,
   normalizeNotePath,
@@ -370,6 +371,9 @@ export class GitHubObsidianClient {
       const repoPath = toRepoPath(vault, notePath);
       await this.assertVaultExists(vault);
 
+      if (shared(notePath)) {
+        return fail("PUBLICATION_REQUIRED", "Use prepare_publication and publish_note to create shared notes atomically.");
+      }
       const existing = await this.getFile(repoPath);
       if (existing) {
         return fail("ALREADY_EXISTS", `Note already exists: ${vault}/${notePath}`, {
@@ -417,6 +421,14 @@ export class GitHubObsidianClient {
         return fail("CONFLICT", "The note changed after it was read.", {
           currentSha: current.sha,
         });
+      }
+
+      if (shared(notePath)) {
+        const before = frontmatter(decodeFileContent(current)).id;
+        const after = frontmatter(input.content).id;
+        if (!before || before !== after) {
+          return fail("ID_IMMUTABLE", "Shared doc_id must be preserved. Use publication tools for registration.");
+        }
       }
 
       const message =
@@ -478,6 +490,12 @@ export class GitHubObsidianClient {
           ? ""
           : "\n";
       const nextContent = `${existingContent}${separator}${input.content}`;
+      if (shared(notePath)) {
+        const before = frontmatter(existingContent).id;
+        if (!before || before !== frontmatter(nextContent).id) {
+          return fail("ID_IMMUTABLE", "Shared doc_id must be preserved.");
+        }
+      }
       const message =
         input.commitMessage?.trim() || `MCP: append ${vault}/${notePath}`;
 
@@ -536,6 +554,9 @@ export class GitHubObsidianClient {
       const path = normalizeNotePath(input.path);
       const repoPath = toRepoPath(vault, path);
       await this.assertVaultExists(vault);
+      if (shared(path)) {
+        return fail("PUBLICATION_REQUIRED", "Use unpublish_note to preserve the source and retire its ID.");
+      }
       const current = await this.getFile(repoPath);
       if (!current) return fail("NOT_FOUND", `Note not found: ${repoPath}`);
       if (input.expectedSha && input.expectedSha !== current.sha) {
@@ -573,6 +594,9 @@ export class GitHubObsidianClient {
       const path = normalizeNotePath(input.path);
       const destinationVault = validateVaultName(input.destinationVault ?? vault);
       const destinationPath = normalizeNotePath(input.destinationPath);
+      if (shared(path) || shared(destinationPath)) {
+        return fail("PUBLICATION_REQUIRED", "Use publication tools for shared-note moves.");
+      }
       const source = toRepoPath(vault, path);
       const destination = toRepoPath(destinationVault, destinationPath);
       if (source === destination) return fail("INVALID_PATH", "Source and destination must differ.");

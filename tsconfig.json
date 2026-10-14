@@ -3,8 +3,13 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types", "@types/node"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types",
+      "@types/node"
+    ],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
@@ -18,6 +23,7 @@
     "auth-worker/src/**/*.ts",
     "mcp-worker/src/**/*.ts",
     "shared/src/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
   ]
 }

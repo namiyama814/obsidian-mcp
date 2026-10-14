@@ -1,7 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { READ_SCOPE, WRITE_SCOPE } from "../../shared/src/scopes.ts";
-import { fail, jsonToolResult, type ToolResult } from "../../shared/src/response.ts";
+import {
+  fail,
+  jsonToolResult,
+  type ToolResult,
+} from "../../shared/src/response.ts";
+import { PublicationService } from "./publication/service.ts";
 import type { GitHubObsidianClient } from "./github/client.ts";
 
 type AuthInfoLike = {
@@ -41,20 +46,25 @@ function scopeDenied(
 function logToolCall(name: string, args: Record<string, unknown>): void {
   // Never log note body / tokens.
   const safe: Record<string, unknown> = { tool: name };
-  for (const [key, value] of Object.entries(args)) {
-    if (key === "content") {
-      safe.contentLength =
-        typeof value === "string" ? value.length : undefined;
-      continue;
-    }
-    safe[key] = value;
+  for (const key of [
+    "vault",
+    "path",
+    "destinationPath",
+    "mode",
+    "doc_id",
+    "force",
+  ]) {
+    if (args[key] !== undefined) safe[key] = args[key];
   }
+  if (typeof args.content === "string")
+    safe.contentLength = args.content.length;
   console.log("mcp_tool_call", safe);
 }
 
 export type CreateObsidianMcpServerOptions = {
   client: GitHubObsidianClient;
   resourceMetadataUrl: string;
+  publication?: PublicationService;
 };
 
 export function createObsidianMcpServer(
@@ -74,7 +84,9 @@ export function createObsidianMcpServer(
   };
 
   const requireWrite = (extra: ToolExtra | undefined) => {
-    const missing = [READ_SCOPE, WRITE_SCOPE].filter((s) => !hasScope(extra, s));
+    const missing = [READ_SCOPE, WRITE_SCOPE].filter(
+      (s) => !hasScope(extra, s),
+    );
     if (missing.length > 0) {
       return scopeDenied(
         missing.length === 2 ? [READ_SCOPE, WRITE_SCOPE] : missing,
@@ -92,8 +104,7 @@ export function createObsidianMcpServer(
     fn: () => Promise<ToolResult>,
   ) => {
     logToolCall(name, args);
-    const denied =
-      needed === "read" ? requireRead(extra) : requireWrite(extra);
+    const denied = needed === "read" ? requireRead(extra) : requireWrite(extra);
     if (denied) return denied;
     const result = await fn();
     return jsonToolResult(result);
@@ -192,12 +203,39 @@ export function createObsidianMcpServer(
       description:
         "READ-ONLY. Search Markdown note filenames and bodies. Returns matched snippets and one-based line numbers. Supports Japanese queries. Optional folder, tags (all required), and inclusive Git commit date filters use a bounded scan. Continue with nextScanOffset when truncated. Optionally limit to one vault. Uses GitHub Code Search when available, otherwise a bounded tree scan (not unbounded full-repo download). Requires OAuth scope obsidian.read.",
       inputSchema: z.object({
-        query: z.string().min(1).describe("Literal search text (Japanese or English)"),
-        folder: z.string().optional().describe("Vault-relative folder, includes descendants"),
-        tags: z.array(z.string().min(1)).max(20).optional().describe("All tags must match; inline and frontmatter tags, optional # prefix"),
-        updatedAfter: z.iso.datetime({ offset: true }).optional().describe("Inclusive Git commit timestamp lower bound (ISO 8601 with timezone)"),
-        updatedBefore: z.iso.datetime({ offset: true }).optional().describe("Inclusive Git commit timestamp upper bound (ISO 8601 with timezone)"),
-        scanOffset: z.number().int().min(0).optional().describe("Continue bounded tree scan with previous nextScanOffset"),
+        query: z
+          .string()
+          .min(1)
+          .describe("Literal search text (Japanese or English)"),
+        folder: z
+          .string()
+          .optional()
+          .describe("Vault-relative folder, includes descendants"),
+        tags: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            "All tags must match; inline and frontmatter tags, optional # prefix",
+          ),
+        updatedAfter: z.iso
+          .datetime({ offset: true })
+          .optional()
+          .describe(
+            "Inclusive Git commit timestamp lower bound (ISO 8601 with timezone)",
+          ),
+        updatedBefore: z.iso
+          .datetime({ offset: true })
+          .optional()
+          .describe(
+            "Inclusive Git commit timestamp upper bound (ISO 8601 with timezone)",
+          ),
+        scanOffset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Continue bounded tree scan with previous nextScanOffset"),
         vault: z
           .string()
           .optional()
@@ -226,29 +264,90 @@ export function createObsidianMcpServer(
       ),
   );
 
-  server.registerTool("read_notes", {
-    title: "Read multiple Markdown notes",
-    description: "READ-ONLY. Read 1 to 20 notes, including content, SHA and commit metadata. Results preserve request order and individual errors. Requires obsidian.read.",
-    inputSchema: z.object({ notes: z.array(z.object({ vault: z.string(), path: z.string() })).min(1).max(20) }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
-  }, async (args, extra) => run("read_notes", args, extra as ToolExtra, "read", () => client.readNotes(args)));
+  server.registerTool(
+    "read_notes",
+    {
+      title: "Read multiple Markdown notes",
+      description:
+        "READ-ONLY. Read 1 to 20 notes, including content, SHA and commit metadata. Results preserve request order and individual errors. Requires obsidian.read.",
+      inputSchema: z.object({
+        notes: z
+          .array(z.object({ vault: z.string(), path: z.string() }))
+          .min(1)
+          .max(20),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
+    },
+    async (args, extra) =>
+      run("read_notes", args, extra as ToolExtra, "read", () =>
+        client.readNotes(args),
+      ),
+  );
 
-  server.registerTool("get_backlinks", {
-    title: "Find incoming links to a note",
-    description: "READ-ONLY. Find wikilinks and inline Markdown links (including embeds) to a note within its vault. Returns snippets and line numbers. Ignores fenced/inline code and ambiguous basename links. Scan at most 80 files; continue with nextScanOffset when truncated. Requires obsidian.read.",
-    inputSchema: z.object({ vault: z.string(), path: z.string(), limit: z.number().int().min(1).max(50).optional(), scanOffset: z.number().int().min(0).optional() }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
-  }, async (args, extra) => run("get_backlinks", args, extra as ToolExtra, "read", () => client.getBacklinks(args)));
+  server.registerTool(
+    "get_backlinks",
+    {
+      title: "Find incoming links to a note",
+      description:
+        "READ-ONLY. Find wikilinks and inline Markdown links (including embeds) to a note within its vault. Returns snippets and line numbers. Ignores fenced/inline code and ambiguous basename links. Scan at most 80 files; continue with nextScanOffset when truncated. Requires obsidian.read.",
+      inputSchema: z.object({
+        vault: z.string(),
+        path: z.string(),
+        limit: z.number().int().min(1).max(50).optional(),
+        scanOffset: z.number().int().min(0).optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE] }] },
+    },
+    async (args, extra) =>
+      run("get_backlinks", args, extra as ToolExtra, "read", () =>
+        client.getBacklinks(args),
+      ),
+  );
 
-  server.registerTool("update_note_section", {
-    title: "Replace a heading section",
-    description: "WRITE. Replace the body beneath an ATX (#) or Setext heading, including subsections, until the next heading at the same or higher level. Keeps the selected heading. Exact heading title without #; occurrence resolves duplicates. Requires expectedSha from read_note, obsidian.read and obsidian.write.",
-    inputSchema: z.object({ vault: z.string(), path: z.string(), heading: z.string().min(1), content: z.string(), expectedSha: z.string().min(1), occurrence: z.number().int().min(1).optional(), commitMessage: z.string().optional() }),
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] }] },
-  }, async (args, extra) => run("update_note_section", args, extra as ToolExtra, "write", () => client.updateNoteSection(args)));
+  server.registerTool(
+    "update_note_section",
+    {
+      title: "Replace a heading section",
+      description:
+        "WRITE. Replace the body beneath an ATX (#) or Setext heading, including subsections, until the next heading at the same or higher level. Keeps the selected heading. Exact heading title without #; occurrence resolves duplicates. Requires expectedSha from read_note, obsidian.read and obsidian.write.",
+      inputSchema: z.object({
+        vault: z.string(),
+        path: z.string(),
+        heading: z.string().min(1),
+        content: z.string(),
+        expectedSha: z.string().min(1),
+        occurrence: z.number().int().min(1).optional(),
+        commitMessage: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        securitySchemes: [
+          { type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] },
+        ],
+      },
+    },
+    async (args, extra) =>
+      run("update_note_section", args, extra as ToolExtra, "write", () =>
+        client.updateNoteSection(args),
+      ),
+  );
 
   server.registerTool(
     "create_note",
@@ -331,7 +430,9 @@ export function createObsidianMcpServer(
         expectedSha: z
           .string()
           .optional()
-          .describe("SHA from read_note; recommended for safe concurrent edits"),
+          .describe(
+            "SHA from read_note; recommended for safe concurrent edits",
+          ),
         commitMessage: z
           .string()
           .optional()
@@ -357,37 +458,232 @@ export function createObsidianMcpServer(
     "move_note",
     {
       title: "Move or rename a Markdown note",
-      description: "WRITE. Atomically move or rename an existing Markdown note, optionally to another existing vault. Never overwrites a destination. Pass expectedSha from read_note to detect stale content. Does not rewrite links in other notes. Requires obsidian.read and obsidian.write.",
+      description:
+        "WRITE. Atomically move or rename an existing Markdown note, optionally to another existing vault. Never overwrites a destination. Pass expectedSha from read_note to detect stale content. Does not rewrite links in other notes. Requires obsidian.read and obsidian.write.",
       inputSchema: z.object({
         vault: z.string().describe("Source vault name"),
         path: z.string().describe("Source note path ending in .md"),
-        destinationPath: z.string().describe("Destination vault-relative path ending in .md"),
-        destinationVault: z.string().optional().describe("Destination vault; defaults to source vault"),
-        expectedSha: z.string().min(1).optional().describe("SHA from the latest read_note"),
-        commitMessage: z.string().optional().describe("Optional Git commit message"),
+        destinationPath: z
+          .string()
+          .describe("Destination vault-relative path ending in .md"),
+        destinationVault: z
+          .string()
+          .optional()
+          .describe("Destination vault; defaults to source vault"),
+        expectedSha: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("SHA from the latest read_note"),
+        commitMessage: z
+          .string()
+          .optional()
+          .describe("Optional Git commit message"),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-      _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] }] },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        securitySchemes: [
+          { type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] },
+        ],
+      },
     },
-    async (args, extra) => run("move_note", args, extra as ToolExtra, "write", () => client.moveNote(args)),
+    async (args, extra) =>
+      run("move_note", args, extra as ToolExtra, "write", () =>
+        client.moveNote(args),
+      ),
   );
 
   server.registerTool(
     "delete_note",
     {
       title: "Delete a Markdown note",
-      description: "WRITE. Delete an existing Markdown note from the repository in a Git commit. Pass expectedSha from read_note to detect stale content; the current SHA is always checked by GitHub when deleting. Requires obsidian.read and obsidian.write.",
+      description:
+        "WRITE. Delete an existing Markdown note from the repository in a Git commit. Pass expectedSha from read_note to detect stale content; the current SHA is always checked by GitHub when deleting. Requires obsidian.read and obsidian.write.",
       inputSchema: z.object({
         vault: z.string().describe("Vault name"),
         path: z.string().describe("Existing note path ending in .md"),
-        expectedSha: z.string().min(1).optional().describe("SHA from the latest read_note"),
-        commitMessage: z.string().optional().describe("Optional Git commit message"),
+        expectedSha: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("SHA from the latest read_note"),
+        commitMessage: z
+          .string()
+          .optional()
+          .describe("Optional Git commit message"),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-      _meta: { securitySchemes: [{ type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] }] },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      _meta: {
+        securitySchemes: [
+          { type: "oauth2", scopes: [READ_SCOPE, WRITE_SCOPE] },
+        ],
+      },
     },
-    async (args, extra) => run("delete_note", args, extra as ToolExtra, "write", () => client.deleteNote(args)),
+    async (args, extra) =>
+      run("delete_note", args, extra as ToolExtra, "write", () =>
+        client.deleteNote(args),
+      ),
   );
+
+  const publication = options.publication;
+  const unavailable = async () =>
+    fail(
+      "PUBLICATION_NOT_CONFIGURED",
+      "Publication service is not configured.",
+    );
+  const publicationTools = [
+    {
+      name: "prepare_publication",
+      writing: false,
+      description:
+        "READ-ONLY. Prepare publication without modifying the source. Shared notes are readable by every Access-authenticated @zuikaku.biz email. Return blockers and a signed plan; do not automatically publish non-shared references. Request approval for each listed private attachment before publish_note.",
+      schema: z.object({
+        vault: z.string(),
+        path: z.string(),
+        destinationPath: z.string().optional(),
+        expectedSha: z.string().min(1),
+        mode: z.enum(["move", "copy"]),
+      }),
+      execute: (args: unknown) =>
+        publication
+          ? publication.prepare(
+              args as Parameters<PublicationService["prepare"]>[0],
+            )
+          : unavailable(),
+    },
+    {
+      name: "publish_note",
+      writing: true,
+      description:
+        "WRITE. Apply the exact confirmed publication plan in one source Git commit. Requires explicit publication approval and all private attachment approvals. Registration success is not production deployment success. Retry with the SAME planToken after an uncertain response.",
+      schema: z.object({
+        planToken: z.string().min(1),
+        confirm: z.literal(true),
+        approvedAttachments: z.array(z.string()).default([]),
+      }),
+      execute: (args: unknown) =>
+        publication
+          ? publication.publish(
+              args as Parameters<PublicationService["publish"]>[0],
+            )
+          : unavailable(),
+    },
+    {
+      name: "get_publication_status",
+      writing: false,
+      description:
+        "READ-ONLY. Determine per-document status from deploy-state and immutable source content. An unauthenticated Access redirect does not prove deployment. Return uncertainty when evidence is missing.",
+      schema: z
+        .object({
+          vault: z.string(),
+          path: z.string().optional(),
+          doc_id: z.string().optional(),
+        })
+        .refine(
+          (a) => !!a.path !== !!a.doc_id,
+          "Provide exactly one of path or doc_id",
+        ),
+      execute: (args: unknown) =>
+        publication
+          ? publication.status(
+              args as Parameters<PublicationService["status"]>[0],
+            )
+          : unavailable(),
+    },
+    {
+      name: "unpublish_note",
+      writing: true,
+      description:
+        "WRITE. First call prepares a stop plan without mutation. After confirmation call with planToken and confirm:true. Preserve source outside shared folder and retire ID atomically. Stop on broken public incoming links. Previous production content remains until successful sync.",
+      schema: z
+        .object({
+          vault: z.string().optional(),
+          path: z.string().optional(),
+          destinationPath: z.string().optional(),
+          expectedSha: z.string().min(1).optional(),
+          planToken: z.string().min(1).optional(),
+          confirm: z.literal(true).optional(),
+        })
+        .refine(
+          (a) =>
+            a.planToken
+              ? a.confirm === true &&
+                !a.vault &&
+                !a.path &&
+                !a.destinationPath &&
+                !a.expectedSha
+              : !!a.vault &&
+                !!a.path &&
+                !!a.destinationPath &&
+                !!a.expectedSha &&
+                a.confirm === undefined,
+          "Provide a stop plan input, or only planToken and confirm:true",
+        ),
+      execute: (args: unknown) =>
+        publication
+          ? publication.unpublish(
+              args as Parameters<PublicationService["unpublish"]>[0],
+            )
+          : unavailable(),
+    },
+    {
+      name: "trigger_publication_sync",
+      writing: true,
+      description:
+        "WRITE. Only on explicit request, dispatch officeSystem sync.yml using a separately configured credential. force defaults false. Report dispatch separately from registration; never retry an uncertain dispatch automatically.",
+      schema: z.object({
+        expectedSourceCommit: z.string().regex(/^[a-f0-9]{40}$/),
+        force: z.boolean().default(false),
+      }),
+      execute: (args: unknown) =>
+        publication
+          ? publication.trigger(
+              args as Parameters<PublicationService["trigger"]>[0],
+            )
+          : unavailable(),
+    },
+  ];
+  for (const tool of publicationTools) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.schema,
+        annotations: {
+          readOnlyHint: !tool.writing,
+          destructiveHint: tool.writing,
+          idempotentHint: tool.name !== "trigger_publication_sync",
+          openWorldHint: false,
+        },
+        _meta: {
+          securitySchemes: [
+            {
+              type: "oauth2",
+              scopes: tool.writing ? [READ_SCOPE, WRITE_SCOPE] : [READ_SCOPE],
+            },
+          ],
+        },
+      },
+      async (args: unknown, extra: unknown) =>
+        run(
+          tool.name,
+          args as Record<string, unknown>,
+          extra as ToolExtra,
+          tool.writing ? "write" : "read",
+          () => tool.execute(args),
+        ),
+    );
+  }
 
   return server;
 }

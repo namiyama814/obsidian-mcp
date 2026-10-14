@@ -28,4 +28,6 @@
   }
   // Secrets (set via wrangler secret put, never commit):
   // - GITHUB_REPO_TOKEN
+  // - PUBLICATION_PLAN_SECRET (32+ random characters)
+  // - OFFICE_GITHUB_TOKEN (optional, officeSystem Contents read / Actions write)
 }

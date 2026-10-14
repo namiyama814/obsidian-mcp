@@ -6,6 +6,7 @@ import {
 import { createMcpHandler } from "agents/mcp/server";
 import type { AuthProps } from "../../shared/src/scopes.ts";
 import { REQUIRED_SCOPES } from "../../shared/src/scopes.ts";
+import { PublicationService } from "./publication/service.ts";
 import { GitHubObsidianClient } from "./github/client.ts";
 import { createObsidianMcpServer } from "./mcp-server.ts";
 
@@ -20,6 +21,8 @@ const VERIFIED_OAUTH_CONTEXT = Symbol.for(
 export interface Env {
   AUTH_SERVER: AuthorizationServerBinding<AuthProps>;
   GITHUB_REPO_TOKEN: string;
+  PUBLICATION_PLAN_SECRET?: string;
+  OFFICE_GITHUB_TOKEN?: string;
   GITHUB_OWNER: string;
   GITHUB_REPO: string;
   GITHUB_BRANCH: string;
@@ -29,9 +32,7 @@ export interface Env {
   AUTH_ISSUER: string;
 }
 
-function attachVerifiedContext(
-  ctx: OAuthResourceContext<AuthProps>,
-): void {
+function attachVerifiedContext(ctx: OAuthResourceContext<AuthProps>): void {
   const auth = ctx.auth;
   const props = ctx.props as unknown as Record<string, unknown>;
   Object.assign(ctx, {
@@ -116,6 +117,18 @@ function createResourceServer(env: Env) {
             createObsidianMcpServer({
               client,
               resourceMetadataUrl,
+              publication: new PublicationService({
+                source: client.config,
+                planSecret: handlerEnv.PUBLICATION_PLAN_SECRET,
+                office: handlerEnv.OFFICE_GITHUB_TOKEN
+                  ? {
+                      owner: "zuikakuedit",
+                      repo: "officeSystem",
+                      branch: "main",
+                      token: handlerEnv.OFFICE_GITHUB_TOKEN,
+                    }
+                  : undefined,
+              }),
             }),
           {
             route: "/mcp",

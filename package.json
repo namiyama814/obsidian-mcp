@@ -15,7 +15,9 @@
     "deploy:mcp": "wrangler deploy -c mcp-worker/wrangler.jsonc",
     "deploy": "npm run deploy:auth && npm run deploy:mcp",
     "cf-typegen:auth": "wrangler types -c auth-worker/wrangler.jsonc --env-interface AuthEnv",
-    "cf-typegen:mcp": "wrangler types -c mcp-worker/wrangler.jsonc --env-interface McpEnv"
+    "cf-typegen:mcp": "wrangler types -c mcp-worker/wrangler.jsonc --env-interface McpEnv",
+    "test:publication:live": "tsx scripts/test-publication-live.ts",
+    "test:publication:office": "tsx scripts/test-publication-office.ts"
   },
   "repository": {
     "type": "git",
@@ -26,11 +28,17 @@
     "@cloudflare/workers-oauth-provider": "^1.2.1",
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.26.0",
+    "nanoid": "^6.0.2",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261005.1",
     "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3 || ^7.0.0",
     "vitest": "^3.2.4 || ^5.0.0",
     "wrangler": "^4.147.0"
