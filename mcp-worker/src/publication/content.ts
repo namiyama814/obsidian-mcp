@@ -241,6 +241,7 @@ export async function loadNotes(
   onlyShared = true,
 ): Promise<Note[]> {
   const notes: Note[] = [];
+  const paths: string[] = [];
   const prefix = `${vault}/`;
   for (const [p, e] of snapshot.entries) {
     if (!p.startsWith(prefix)) continue;
@@ -262,6 +263,11 @@ export async function loadNotes(
     )
       continue;
     safePath(relative, true);
+    paths.push(p);
+  }
+  await repo.prefetchText(snapshot, paths);
+  for (const p of paths) {
+    const relative = p.slice(prefix.length);
     const content = await repo.text(snapshot, p);
     notes.push({ path: relative, content, id: frontmatter(content).id });
   }

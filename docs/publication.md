@@ -97,6 +97,10 @@ MCPクライアントは次の順に処理します。
 | `BROKEN_INCOMING_LINK` | 返された参照元リンクを修正し、再準備する |
 | `OUTCOME_UNKNOWN`・通信切断 | **同じ`planToken`で再確認する。新しい予定・IDを作らない** |
 | `VERIFICATION_LIMIT`・`TREE_TRUNCATED` | 検証を省略せず停止する。管理者が履歴・データ量とWorkerの制限を確認する |
+| `GITHUB_TIMEOUT`・`GITHUB_UNAVAILABLE` | タイムアウト・通信失敗。適用中に発生した場合は同じ`planToken`で成否を確認する |
+| `GITHUB_REDIRECT_REJECTED` | APIが3xxを返した。自動追従はせず、管理者が移転先と設定を確認する |
+| `GITHUB_RATE_LIMITED` | HTTP 429。時間を置き、適用の再確認には同じ`planToken`を使用する |
+| `GITHUB_INVALID_RESPONSE` | 応答のJSON、本文の完全性、サイズ、Git SHAを確認できないため停止した |
 | `DISPATCH_OUTCOME_UNKNOWN` | 起動が受け付けられた可能性があるため自動再実行せず、Actionsを確認する |
 
 再実行では、コミットの操作識別子を検索し、成功済みなら同じID・コミットを返します。期限切れやブランチ変更より先に成功済み操作を確認するため、成功直後の応答喪失でもIDを再発行しません。

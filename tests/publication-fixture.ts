@@ -122,6 +122,24 @@ export class FakeGitHub {
     if (this.failAt === `${method} ${route.split("?")[0]}`)
       return Response.json({ error: "injected" }, { status: 500 });
     if (route === "") return Response.json({ private: true });
+    if (route === "/graphql" && method === "POST") {
+      const repository: Record<string, unknown> = {};
+      for (const [key, oid] of Object.entries(body.variables)) {
+        if (!/^s\d+$/.test(key)) continue;
+        const bytes = this.blobs.get(String(oid));
+        repository[`b${key.slice(1)}`] = bytes
+          ? {
+              __typename: "Blob",
+              oid,
+              byteSize: bytes.length,
+              isBinary: false,
+              isTruncated: false,
+              text: Buffer.from(bytes).toString("utf8"),
+            }
+          : null;
+      }
+      return Response.json({ data: { repository } });
+    }
     const ref = route.match(/^\/git\/refs?\/heads\/(.+)$/);
     if (ref) {
       if (method === "GET")

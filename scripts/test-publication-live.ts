@@ -60,6 +60,11 @@ await github.atomic(
   [
     { path: "main/Dummy.md", content: note },
     { path: "main/dummy.png", sha: blob.sha },
+    // Exercise immutable GraphQL batching during incoming-link verification.
+    ...Array.from({ length: 8 }, (_, i) => ({
+      path: `main/Batch-${i}.md`,
+      content: `# Fabricated private note ${i}\nNo references.\n`,
+    })),
   ],
   "dummy-fixture-setup",
 );
@@ -258,6 +263,7 @@ console.log(
         "same-token retry",
         "frontmatter/comments/code preserved",
         "atomic unpublication",
+        "batched immutable Markdown verification",
       ],
       limitations: [
         "OAuth verified middleware context is injected in this local transport test; production OAuth login and Worker deployment are not tested.",

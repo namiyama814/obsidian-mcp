@@ -654,3 +654,55 @@ it("rejects malformed and encoded block fragments before registration", () => {
     ),
   ).toThrow();
 });
+
+it("moves across a 60-note vault within 50 requests while preserving registration and status checks", async () => {
+  const files: Record<string, string> = {
+    "main/Private.md": "# Dummy source\n",
+  };
+  for (let i = 0; i < 60; i++)
+    files[`main/Notes/${i}.md`] = `# Fabricated note ${i}\n`;
+  const s = setup(files);
+  const p = await prepared(s);
+  expect(p.ready).toBe(true);
+  expect(fake.calls.length).toBeLessThan(50);
+  expect(fake.calls.some((c) => c.route === "/graphql")).toBe(true);
+  fake.calls.length = 0;
+  const result = await apply(s, p);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("Publication failed");
+  expect(fake.calls.length).toBeLessThan(50);
+  expect(fake.files()["main/Private.md"]).toBeUndefined();
+  expect(fake.files()["main/社内共有/Private.md"]).toBeDefined();
+  const ledger = registry(String(fake.files()["main/.docs-id-registry.json"]));
+  expect(ledger.ids[String(result.doc_id)]?.path).toBe("社内共有/Private.md");
+  expect(
+    await s.status({ vault: "main", doc_id: String(result.doc_id) }),
+  ).toMatchObject({
+    ok: true,
+    registration: "registered",
+    reason: "OFFICE_TOKEN_NOT_CONFIGURED",
+  });
+});
+it("still blocks a broken incoming link in the final batch of a large private vault", async () => {
+  const files: Record<string, string> = {
+    "main/Private.md": "# Dummy source\n",
+  };
+  for (let i = 0; i < 60; i++)
+    files[`main/Notes/${i}.md`] = `# Fabricated ${i}\n`;
+  files["main/Notes/59.md"] += "\n[source](../Private.md)\n";
+  const s = setup(files);
+  const head = fake.refs.get("main");
+  const p = await prepared(s);
+  expect(p).toMatchObject({
+    ready: false,
+    planToken: null,
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        code: "BROKEN_INCOMING_LINK",
+        path: "Notes/59.md",
+      }),
+    ]),
+  });
+  expect(fake.refs.get("main")).toBe(head);
+  expect(fake.calls.length).toBeLessThan(50);
+});
